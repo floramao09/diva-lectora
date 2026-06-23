@@ -79,9 +79,10 @@ export default function LectorPage() {
 
     (async () => {
       try {
-        // Importar epub.js solo en el navegador
+        // Importar epub.js solo en el navegador (evita errores de TypeScript con el tipo)
         const ePubModule = await import("epubjs");
-        const ePub = ePubModule.default || ePubModule;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ePub = (ePubModule as any).default || (ePubModule as any);
 
         // Obtener URL firmada del archivo en Supabase Storage
         const { data, error: urlErr } = await supabase.storage
