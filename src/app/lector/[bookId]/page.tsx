@@ -79,45 +79,58 @@ export default function LectorPage() {
 
     (async () => {
       try {
-        const ePub = (await import("epubjs")).default;
+        // Importar epub.js solo en el navegador
+        const ePubModule = await import("epubjs");
+        const ePub = ePubModule.default || ePubModule;
 
+        // Obtener URL firmada del archivo en Supabase Storage
         const { data, error: urlErr } = await supabase.storage
           .from("epubs")
           .createSignedUrl(libro.archivo_url, 60 * 60);
 
         if (urlErr || !data?.signedUrl) {
-          setError("No se pudo abrir el archivo EPUB.");
+          setError("No se pudo abrir el archivo EPUB. Verifica que el archivo existe en Supabase Storage.");
           return;
         }
+
+        if (cancelled) return;
 
         const book = ePub(data.signedUrl);
         bookRef.current = book;
 
-        const rendition = book.renderTo(viewerRef.current!, {
-          width: "100%",
-          height: "100%",
+        // Esperar a que el libro esté listo antes de renderizar
+        await book.ready;
+
+        if (cancelled) return;
+
+        const viewer = viewerRef.current!;
+
+        const rendition = book.renderTo(viewer, {
+          width: viewer.clientWidth || 380,
+          height: viewer.clientHeight || 500,
           spread: "none",
+          flow: "paginated",
         });
         renditionRef.current = rendition;
 
-        // Restaurar última posición o empezar desde el inicio
+        // Mostrar desde la última posición guardada o desde el inicio
         await rendition.display(libro.ubicacion_actual || undefined);
 
         rendition.on("relocated", (location: any) => {
           if (cancelled) return;
           const pct = Math.round((location.start.percentage || 0) * 100);
           setProgress(pct);
-          // Guardar posición en Supabase (silencioso)
           supabase
             .from("libros")
             .update({
               ubicacion_actual: location.start.cfi,
               estado: "leyendo",
             })
-            .eq("id", libro.id);
+            .eq("id", libro.id)
+            .then(() => {});
         });
 
-        rendition.on("selected", (cfiRange: string, contents: any) => {
+        rendition.on("selected", (_cfiRange: string, contents: any) => {
           const text = contents.window.getSelection()?.toString() || "";
           if (text.trim().length > 0) {
             setSelectedText(text.trim());
@@ -126,18 +139,22 @@ export default function LectorPage() {
         });
 
         applyStyles(rendition, bg, font, fontSize);
-      } catch (e) {
-        setError("Hubo un problema al cargar el libro.");
+        setError(""); // limpiar error si todo salió bien
+      } catch (e: any) {
+        if (!cancelled) {
+          console.error("Error cargando EPUB:", e);
+          setError("Hubo un problema al cargar el libro: " + (e?.message || "Error desconocido"));
+        }
       }
     })();
 
     return () => {
       cancelled = true;
       if (bookRef.current) {
-        try {
-          bookRef.current.destroy();
-        } catch {}
+        try { bookRef.current.destroy(); } catch {}
+        bookRef.current = null;
       }
+      renditionRef.current = null;
     };
   }, [libro]);
 
@@ -238,10 +255,10 @@ export default function LectorPage() {
         <div className="px-[18px] py-4 text-center text-sm text-red-400">{error}</div>
       )}
 
-      {/* epub viewer */}
-      <div className="flex-1 relative" style={{ minHeight: "60vh" }}>
+      {/* epub viewer — altura fija necesaria para que epub.js renderice */}
+      <div className="relative" style={{ height: "calc(100vh - 200px)", minHeight: 400 }}>
         <div ref={viewerRef} className="absolute inset-0" />
-        {/* invisible tap zones for prev/next page */}
+        {/* zonas invisibles para pasar página tocando los bordes */}
         <button
           onClick={goPrev}
           aria-label="Página anterior"
